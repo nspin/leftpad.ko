@@ -31,7 +31,7 @@ MODULE_SUPPORTED_DEVICE(DEVICE_NAME);
 /* PARAMS */
 
 
-static short leftpad_width = 10;
+static short leftpad_width = 32;
 static short leftpad_fill = 32;
 static unsigned long leftpad_buffer_size = 1024;
 
@@ -326,70 +326,59 @@ static ssize_t leftpad_write(struct file *file, const char *buffer, size_t lengt
     int i;
     struct buffer *buf = file->private_data;
     ssize_t actual_length;
+    ssize_t ret;
 
-    int written = 0;
-
-    while (written < length) {
-
-        if (mutex_lock_interruptible(&buf->lock)) {
-            return -ERESTARTSYS;
-        }
-
-        while (buf->length == buf->size) {
-            mutex_unlock(&buf->lock);
-            if (file->f_flags & O_NONBLOCK) {
-                return -EAGAIN;
-            }
-            if (wait_event_interruptible(buf->read_queue, buf->length != buf->size)) {
-                return -ERESTARTSYS;
-            }
-            if (mutex_lock_interruptible(&buf->lock)) {
-                return -ERESTARTSYS;
-            }
-        }
-
-        actual_length = min(length, buf->size - buf->length);
-
-        /* 3 cases (c = cursor, e = end of data, n = end of data after write):
-         *     [ c e n ]
-         *     [ n c e ]
-         *     [ e n c ]
-         */
-        if (buf->cursor + buf->length + actual_length <= buf->size) {
-            if (copy_from_user(buf->start + buf->cursor + buf->length, buffer + written, actual_length)) {
-                mutex_unlock(&buf->lock);
-                return -EFAULT;
-            }
-        } else if (buf->cursor + buf->length <= buf->size) {
-            if (copy_from_user(buf->start + buf->cursor + buf->length, buffer + written, buf->size - buf->length)) {
-                mutex_unlock(&buf->lock);
-                return -EFAULT;
-            }
-            if (copy_from_user(buf->start, buffer + written + buf->size - buf->length, length - buf->size + buf->length)) {
-                mutex_unlock(&buf->lock);
-                return -EFAULT;
-            }
-        } else {
-            if (copy_from_user(buf->start + buf->cursor + buf->length - buf->size, buffer + written, actual_length)) {
-                mutex_unlock(&buf->lock);
-                return -EFAULT;
-            }
-        }
-
-        for (i = 0; i < actual_length; i++) {
-            if (buf->start[buf->cursor + i % buf->size] == '\n') {
-                append_newline(i % buf->size, buf);
-            }
-        }
-
-        buf->length += actual_length;
-        written += actual_length;
-
-        wake_up_interruptible(&buf->read_queue);
+    if (mutex_lock_interruptible(&buf->lock)) {
+        return -ERESTARTSYS;
     }
+
+    if (buf->length + length > buf->size) {
+        ret = -ENOBUFS;
+        goto cleanup;
+    }
+
+    actual_length = min(length, buf->size - buf->length);
+
+    /* 3 cases (c = cursor, e = end of data, n = end of data after write):
+     *     [ c e n ]
+     *     [ n c e ]
+     *     [ e n c ]
+     */
+    if (buf->cursor + buf->length + actual_length <= buf->size) {
+        if (copy_from_user(buf->start + buf->cursor + buf->length, buffer, actual_length)) {
+            ret = -EFAULT;
+            goto cleanup;
+        }
+    } else if (buf->cursor + buf->length <= buf->size) {
+        if (copy_from_user(buf->start + buf->cursor + buf->length, buffer, buf->size - buf->length)) {
+            ret = -EFAULT;
+            goto cleanup;
+        }
+        if (copy_from_user(buf->start, buffer + buf->size - buf->length, length - buf->size + buf->length)) {
+            ret = -EFAULT;
+            goto cleanup;
+        }
+    } else {
+        if (copy_from_user(buf->start + buf->cursor + buf->length - buf->size, buffer, actual_length)) {
+            ret = -EFAULT;
+            goto cleanup;
+        }
+    }
+
+    for (i = 0; i < actual_length; i++) {
+        if (buf->start[buf->cursor + i % buf->size] == '\n') {
+            append_newline(i % buf->size, buf);
+        }
+    }
+
+    wake_up_interruptible(&buf->read_queue);
+
+    buf->length += actual_length;
+    ret = actual_length;
 
     buffer_show(buf);
 
-    mutex_unlock(&buf->lock);
-    return actual_length;
+    cleanup:
+        mutex_unlock(&buf->lock);
+        return ret;
 }
