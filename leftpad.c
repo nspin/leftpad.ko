@@ -16,7 +16,8 @@
 #include <linux/string.h>
 
 
-#define DEVICE_NAME "leftpad"
+#define LEFTPAD_DEVICE_NAME "leftpad"
+#define LEFTPAD_MAJOR 1337
 #define LEFTPAD_WIDTH_MODULUS 1024
 #define SUCCESS 0
 #define FAILURE -1
@@ -25,7 +26,7 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Nick Spinale <spinalen@gmail.com>");
 MODULE_DESCRIPTION("leftPad() implemented as a kernel module");
-MODULE_SUPPORTED_DEVICE(DEVICE_NAME);
+MODULE_SUPPORTED_DEVICE(LEFTPAD_DEVICE_NAME);
 
 
 /* PARAMS */
@@ -181,13 +182,6 @@ static struct file_operations fops = {
     .release = leftpad_release
 };
 
-static struct miscdevice leftpad_miscdevice = {
-    .minor = MISC_DYNAMIC_MINOR,
-    .name = "leftpad",
-    .fops = &fops
-};
-
-
 static int __init leftpad_init(void)
 {
     size_t i;
@@ -196,7 +190,9 @@ static int __init leftpad_init(void)
         leftpad_padding[i] = leftpad_get_fill();
     }
 
-    misc_register(&leftpad_miscdevice);
+    if (register_chrdev(LEFTPAD_MAJOR, "leftpad", &fops)) {
+        return FAILURE;
+    }
 
 #ifdef LEFTPAD_DEBUG
     printk(KERN_INFO "Init leftpad: width=%zu, fill=ascii(%d), buffer_size=%zu\n",
@@ -208,7 +204,7 @@ static int __init leftpad_init(void)
 
 static void __exit leftpad_exit(void)
 {
-    misc_deregister(&leftpad_miscdevice);
+    unregister_chrdev(LEFTPAD_MAJOR, "leftpad");
 }
 
 
