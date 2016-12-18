@@ -19,6 +19,7 @@
 #define DEVICE_NAME "leftpad"
 #define LEFT_PAD_WIDTH_MODULUS 1024
 #define SUCCESS 0
+#define FAILURE -1
 
 
 MODULE_LICENSE("GPL");
@@ -42,15 +43,35 @@ module_param(leftpad_buffer_size, ulong, 0000);
 MODULE_PARM_DESC(leftpad_buffer_size, "Size of internal ring buffer.");
 
 
-/* BUFFERS */
+/* STATE */
 
+
+struct newline {
+    unsigned long ix;
+    struct newline *prev, *next;
+};
 
 struct buffer {
     wait_queue_head_t read_queue;
     struct mutex lock;
     char *start;
     unsigned long size, cursor, length, padding_left;
+    struct newline *head, *tail;
 };
+
+static int append_newline(unsigned long ix, struct buffer *buf)
+{
+    struct newline *nl = kmalloc(sizeof(*nl), GFP_KERNEL);
+    if (unlikely(!nl)) {
+        return FAILURE;
+    }
+    nl->ix = ix;
+    nl->prev = buf->tail->prev;
+    nl->next = buf->tail;
+    buf->tail->prev->next = nl;
+    buf->tail->prev = nl;
+    return SUCCESS;
+}
 
 static struct buffer *buffer_alloc(unsigned long size)
 {
@@ -73,11 +94,23 @@ static struct buffer *buffer_alloc(unsigned long size)
     buf->length = 0;
     buf->padding_left = -1;
 
+    buf->head->prev = NULL;
+    buf->head->ix = -1;
+    buf->head->next = buf->tail;
+    buf->tail->prev = buf->head;
+    buf->tail->ix = -1;
+    buf->tail->next = NULL;
+
     return buf;
 }
 
 static void buffer_free(struct buffer *buf)
 {
+    struct newline *cur;
+    for (cur = buf->head->next; cur != NULL; cur = cur->next) {
+        kfree(cur->prev);
+    }
+    kfree(buf->tail);
     kfree(buf->start);
     kfree(buf);
 }
@@ -86,7 +119,7 @@ static void buffer_free(struct buffer *buf)
 /* LOGIC */
 
 
-static int leftpad_get_width(void)
+static unsigned long leftpad_get_width(void)
 {
     return leftpad_width % LEFT_PAD_WIDTH_MODULUS;
 }
@@ -95,18 +128,6 @@ static char leftpad_get_fill(void)
 {
     return leftpad_fill % 128;
 }
-
-/* static int leftpad_line_length(struct buffer *buf) */
-/* { */
-/*     int i; */
-/*     for (i = 0; i < buf->length; i++) { */
-/*         if (buf->start[buf->cursor + i % buf->size] == '\n') { */
-/*             return i; */
-/*         } */
-/*     } */
-/*     return -1; */
-/* } */
-
 
 /* CORE */
 
@@ -139,13 +160,13 @@ static struct miscdevice leftpad_miscdevice = {
 static int __init leftpad_init(void)
 {
     int i;
-    leftpad_padding = kmalloc(leftpad_width, GFP_KERNEL);
+    leftpad_padding = kmalloc(leftpad_get_width(), GFP_KERNEL);
     for (i = 0; i < leftpad_width; i++) {
         leftpad_padding[i] = leftpad_fill;
     }
 
     misc_register(&leftpad_miscdevice);
-    printk(KERN_INFO "Init leftpad: width=%i, fill=ascii(%i)", leftpad_get_width(), leftpad_get_fill());
+    printk(KERN_INFO "Init leftpad: width=%lu, fill=ascii(%i)", leftpad_get_width(), leftpad_get_fill());
     return SUCCESS;
 }
 
@@ -184,17 +205,20 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
 {
     struct buffer *buf = file->private_data;
     size_t actual_length;
+    unsigned long line_length;
+    int finished_line;
+    ssize_t result;
 
     if (mutex_lock_interruptible(&buf->lock)) {
         return -ERESTARTSYS;
     }
 
-    while (!buf->length) {
+    while (buf->head->next == buf->tail) {
         mutex_unlock(&buf->lock);
         if (file->f_flags & O_NONBLOCK) {
             return -EAGAIN;
         }
-        if (wait_event_interruptible(buf->read_queue, buf->length != 0)) {
+        if (wait_event_interruptible(buf->read_queue, buf->head->next != buf->tail)) {
             return -ERESTARTSYS;
         }
         if (mutex_lock_interruptible(&buf->lock)) {
@@ -202,32 +226,75 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
         }
     }
 
-    actual_length = min(length, buf->length);
+    line_length = buf->head->next->ix - buf->cursor % leftpad_buffer_size;
 
-    if (buf->cursor + actual_length > buf->size) {
-        if (copy_to_user(buffer, buf->start + buf->cursor, buf->size - buf->cursor)) {
-            mutex_unlock(&buf->lock);
-            return -EFAULT;
-        }
-        if (copy_to_user(buffer, buf->start, actual_length - (buf->size - buf->cursor))) {
-            mutex_unlock(&buf->lock);
-            return -EFAULT;
-        }
-        buf->cursor = buf->cursor + actual_length - buf->size;
-    } else {
-        if (copy_to_user(buffer, buf->start + buf->cursor, actual_length)) {
-            mutex_unlock(&buf->lock);
-            return -EFAULT;
-        }
-        buf->cursor = buf->cursor + actual_length;
+    if (buf->padding_left == -1) {
+        buf->padding_left = max((unsigned long) 0, leftpad_get_width() - line_length);
     }
 
-    mutex_unlock(&buf->lock);
-    return actual_length;
+    if (buf->padding_left >= length) {
+
+        if (copy_to_user(buffer, leftpad_padding, length)) {
+            result = -EFAULT;
+            goto ret;
+        }
+        buf->padding_left -= length;
+        result = length;
+        goto ret;
+
+    } else {
+
+        if (copy_to_user(buffer, leftpad_padding, buf->padding_left)) {
+            result = -EFAULT;
+            goto ret;
+        }
+
+        buffer += buf->padding_left;
+        length -= buf->padding_left;
+        buf->padding_left = 0;
+
+        if (length >= line_length + 1) {
+            actual_length = line_length + 1;
+            finished_line = 1;
+        } else {
+            actual_length = length;
+            finished_line = 0;
+        }
+
+        if (buf->cursor + actual_length > buf->size) {
+            if (copy_to_user(buffer, buf->start + buf->cursor, buf->size - buf->cursor)) {
+                result = -EFAULT;
+                goto ret;
+            }
+            if (copy_to_user(buffer, buf->start, actual_length - (buf->size - buf->cursor))) {
+                result = -EFAULT;
+                goto ret;
+            }
+            buf->cursor = buf->cursor + actual_length - buf->size;
+        } else {
+            if (copy_to_user(buffer, buf->start + buf->cursor, actual_length)) {
+                result = -EFAULT;
+                goto ret;
+            }
+            buf->cursor = buf->cursor + actual_length;
+        }
+
+        if (finished_line) {
+            buf->head->next = buf->head->next->next;
+            buf->padding_left = -1;
+        }
+
+        result = actual_length;
+    }
+
+    ret:
+        mutex_unlock(&buf->lock);
+        return result;
 }
 
 static ssize_t leftpad_write(struct file *file, const char *buffer, size_t length, loff_t * offset)
 {
+    int i;
     struct buffer *buf = file->private_data;
     ssize_t actual_length;
 
@@ -277,6 +344,12 @@ static ssize_t leftpad_write(struct file *file, const char *buffer, size_t lengt
             if (copy_from_user(buf->start + buf->cursor + buf->length - buf->size, buffer + written, actual_length)) {
                 mutex_unlock(&buf->lock);
                 return -EFAULT;
+            }
+        }
+
+        for (i = 0; i < actual_length; i++) {
+            if (buf->start[buf->cursor + i % buf->size] == '\n') {
+                append_newline(i % buf->size, buf);
             }
         }
 
