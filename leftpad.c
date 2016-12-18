@@ -31,19 +31,19 @@ MODULE_SUPPORTED_DEVICE(DEVICE_NAME);
 /* PARAMS */
 
 
-static short leftpad_width = 32;
-static short leftpad_fill = 32;
-static unsigned long leftpad_buffer_size = 1024;
+static int leftpad_width = 32;
+static int leftpad_fill = 32;
+static int leftpad_buffer_size = 1024;
 
-module_param(leftpad_width, short, S_IRUGO | S_IWUSR);
+module_param(leftpad_width, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(leftpad_width, "Lines are padded so that their width (not including EOL) is the residue class modulo 1024 of the value of this parameter.");
-module_param(leftpad_fill, short, S_IRUGO | S_IWUSR);
+module_param(leftpad_fill, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(leftpad_fill, "The residue class modulo 128 of the value of this parameter is used to pad lines shorter than leftpad_width.");
-module_param(leftpad_buffer_size, ulong, 0000);
+module_param(leftpad_buffer_size, int, 0000);
 MODULE_PARM_DESC(leftpad_buffer_size, "Size of internal ring buffer.");
 
 
-static unsigned long leftpad_get_width(void)
+static size_t leftpad_get_width(void)
 {
     return leftpad_width % LEFT_PAD_WIDTH_MODULUS;
 }
@@ -53,12 +53,17 @@ static char leftpad_get_fill(void)
     return leftpad_fill % 128;
 }
 
+static size_t leftpad_get_buffer_size(void)
+{
+    return leftpad_buffer_size;
+}
+
 
 /* STATE */
 
 
 struct newline {
-    unsigned long ix;
+    size_t ix;
     struct newline *prev, *next;
 };
 
@@ -66,11 +71,12 @@ struct buffer {
     wait_queue_head_t read_queue;
     struct mutex lock;
     char *start;
-    unsigned long size, cursor, length, padding_left;
+    size_t cursor, size, length;
+    ssize_t padding_left;
     struct newline *head, *tail;
 };
 
-static int append_newline(unsigned long ix, struct buffer *buf)
+static int append_newline(size_t ix, struct buffer *buf)
 {
     struct newline *nl = kmalloc(sizeof(*nl), GFP_KERNEL);
     if (unlikely(!nl)) {
@@ -84,7 +90,7 @@ static int append_newline(unsigned long ix, struct buffer *buf)
     return SUCCESS;
 }
 
-static struct buffer *buffer_alloc(unsigned long size)
+static struct buffer *buffer_alloc(size_t size)
 {
     struct buffer *buf = kmalloc(sizeof(*buf), GFP_KERNEL);
     if (unlikely(!buf)) {
@@ -138,7 +144,7 @@ static void buffer_free(struct buffer *buf)
 
 static void buffer_show(struct buffer *buf)
 {
-    int i;
+    size_t i;
     char *str = kmalloc(buf->length + 1, GFP_KERNEL);
 
     for (i = 0; i < buf->length; i++) {
@@ -182,7 +188,7 @@ static struct miscdevice leftpad_miscdevice = {
 
 static int __init leftpad_init(void)
 {
-    int i;
+    size_t i;
     leftpad_padding = kmalloc(leftpad_get_width(), GFP_KERNEL);
     for (i = 0; i < leftpad_width; i++) {
         leftpad_padding[i] = leftpad_fill;
@@ -190,8 +196,8 @@ static int __init leftpad_init(void)
 
     misc_register(&leftpad_miscdevice);
 
-    printk(KERN_INFO "Init leftpad: width=%lu, fill=ascii(%i), buffer_size=(%lu)",
-            leftpad_get_width(), leftpad_get_fill(), leftpad_buffer_size);
+    printk(KERN_INFO "Init leftpad: width=%zu, fill=ascii(%d), buffer_size=%zu",
+            leftpad_get_width(), leftpad_get_fill(), leftpad_get_buffer_size());
 
     return SUCCESS;
 }
@@ -211,7 +217,7 @@ module_exit(leftpad_exit);
 
 static int leftpad_open(struct inode *inode, struct file *file)
 {
-    struct buffer *buf = buffer_alloc(leftpad_buffer_size);
+    struct buffer *buf = buffer_alloc(leftpad_get_buffer_size());
     if (unlikely(!buf)) {
         return -ENOMEM;
     }
@@ -231,7 +237,7 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
 {
     struct buffer *buf = file->private_data;
     size_t actual_length;
-    unsigned long line_length;
+    size_t line_length;
     int finished_line;
     ssize_t result;
     printk("read size: %zu", length);
@@ -253,11 +259,11 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
         }
     }
 
-    line_length = buf->head->next->ix - buf->cursor % leftpad_buffer_size;
+    line_length = buf->head->next->ix - buf->cursor % leftpad_get_buffer_size();
 
-    printk(KERN_INFO "padding_left = %zu", buf->padding_left);
+    printk(KERN_INFO "padding_left = %zd", buf->padding_left);
     if (buf->padding_left == -1) {
-        buf->padding_left = max((unsigned long) 0, leftpad_get_width() - line_length);
+        buf->padding_left = max((size_t) 0, leftpad_get_width() - line_length);
     }
     printk(KERN_INFO "padding_left = %zu", buf->padding_left);
 
@@ -323,7 +329,7 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
 
 static ssize_t leftpad_write(struct file *file, const char *buffer, size_t length, loff_t * offset)
 {
-    int i;
+    size_t i;
     struct buffer *buf = file->private_data;
     ssize_t actual_length;
     ssize_t ret;
