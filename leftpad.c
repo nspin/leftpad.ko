@@ -19,7 +19,6 @@
 #define DEVICE_NAME "leftpad"
 #define LEFT_PAD_WIDTH_MODULUS 1024
 #define SUCCESS 0
-#define BUF_SIZE 1024
 
 
 MODULE_LICENSE("GPL");
@@ -33,11 +32,14 @@ MODULE_SUPPORTED_DEVICE(DEVICE_NAME);
 
 static short leftpad_width = 80;
 static short leftpad_fill = 32;
+static unsigned long leftpad_buffer_size = 1024;
 
 module_param(leftpad_width, short, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(leftpad_width, "Lines are padded so that their width (including EOL) is the residue class modulo 1024 of the value of this parameter.");
+MODULE_PARM_DESC(leftpad_width, "Lines are padded so that their width (not including EOL) is the residue class modulo 1024 of the value of this parameter.");
 module_param(leftpad_fill, short, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(leftpad_fill, "The residue class modulo 128 of the value of this parameter is used to pad lines shorter than leftpad_width.");
+module_param(leftpad_buffer_size, ulong, 0000);
+MODULE_PARM_DESC(leftpad_buffer_size, "Size of internal ring buffer.");
 
 
 /* BUFFERS */
@@ -47,17 +49,17 @@ struct buffer {
     wait_queue_head_t read_queue;
     struct mutex lock;
     char *start;
-    unsigned long size, cursor, length;
+    unsigned long size, cursor, length, padding_left;
 };
 
 static struct buffer *buffer_alloc(unsigned long size)
 {
-    struct buffer *buf = kzalloc(sizeof(*buf), GFP_KERNEL);
+    struct buffer *buf = kmalloc(sizeof(*buf), GFP_KERNEL);
     if (unlikely(!buf)) {
         return NULL;
     }
 
-    buf->start = kzalloc(size, GFP_KERNEL);
+    buf->start = kmalloc(size, GFP_KERNEL);
     if (unlikely(!buf->start)) {
         kfree(buf);
         return NULL;
@@ -68,14 +70,17 @@ static struct buffer *buffer_alloc(unsigned long size)
 
     buf->cursor = 0;
     buf->size = size;
+    buf->length = 0;
+    buf->padding_left = -1;
 
     return buf;
 }
 
-static void buffer_free(struct buffer *buffer)
+static void buffer_free(struct buffer *buf)
 {
-    kfree(buffer->start);
-    kfree(buffer);
+    printk(KERN_INFO "freeing");
+    kfree(buf->start);
+    kfree(buf);
 }
 
 
@@ -92,11 +97,22 @@ static char leftpad_get_fill(void)
     return leftpad_fill % 128;
 }
 
+/* static int leftpad_line_length(struct buffer *buf) */
+/* { */
+/*     int i; */
+/*     for (i = 0; i < buf->length; i++) { */
+/*         if (buf->start[buf->cursor + i % buf->size] == '\n') { */
+/*             return i; */
+/*         } */
+/*     } */
+/*     return -1; */
+/* } */
+
 
 /* CORE */
 
 
-static int leftpad_in_use = 0;
+static char *leftpad_padding;
 
 static int leftpad_open(struct inode *, struct file *);
 static int leftpad_release(struct inode *, struct file *);
@@ -123,9 +139,14 @@ static struct miscdevice leftpad_miscdevice = {
 
 static int __init leftpad_init(void)
 {
+    int i;
+    leftpad_padding = kmalloc(leftpad_width, GFP_KERNEL);
+    for (i = 0; i < leftpad_width; i++) {
+        leftpad_padding[i] = leftpad_fill;
+    }
 
     misc_register(&leftpad_miscdevice);
-    printk(KERN_INFO "Init leftpad: width=%i, fill=ascii(%i)\n", leftpad_get_width(), leftpad_get_fill());
+    printk(KERN_INFO "Init leftpad: width=%i, fill=ascii(%i)", leftpad_get_width(), leftpad_get_fill());
     return SUCCESS;
 }
 
@@ -144,23 +165,22 @@ module_exit(leftpad_exit);
 
 static int leftpad_open(struct inode *inode, struct file *file)
 {
-    struct buffer *buf = buffer_alloc(BUF_SIZE);
+    struct buffer *buf = buffer_alloc(leftpad_buffer_size);
     if (unlikely(!buf)) {
         return -ENOMEM;
     }
 
     file->private_data = buf;
 
-    leftpad_in_use++;
+    try_module_get(THIS_MODULE);
 
     return SUCCESS;
 }
 
 static int leftpad_release(struct inode *inode, struct file *file)
 {
-    leftpad_in_use--;
-	buffer_free(file->private_data);
     module_put(THIS_MODULE);
+	buffer_free(file->private_data);
     return SUCCESS;
 }
 
@@ -178,7 +198,7 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
         if (file->f_flags & O_NONBLOCK) {
             return -EAGAIN;
         }
-        if (wait_event_interruptible (buf->read_queue, buf->length != 0)) {
+        if (wait_event_interruptible(buf->read_queue, buf->length != 0)) {
             return -ERESTARTSYS;
         }
         if (mutex_lock_interruptible(&buf->lock)) {
