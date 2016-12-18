@@ -147,6 +147,7 @@ static void buffer_free(struct buffer *buf)
 static void buffer_show(struct buffer *buf)
 {
     size_t i;
+    struct newline *cur;
     char *str = kmalloc(buf->length + 1, GFP_KERNEL);
 
     for (i = 0; i < buf->length; i++) {
@@ -156,6 +157,12 @@ static void buffer_show(struct buffer *buf)
 
     printk(KERN_INFO "Showing leftpad buffer at %p:\n", buf);
     printk(KERN_CONT "   padding_left: %zd\n", buf->padding_left);
+
+    printk(KERN_CONT "   newlines:\n");
+    for (cur = buf->head->next; cur != buf->tail; cur = cur->next) {
+        printk(KERN_CONT "     +%zd\n", cur->ix - buf->cursor % buf->size);
+    }
+
     printk(KERN_CONT "   contents: \"%s\"\n", str);
 }
 #endif
@@ -303,12 +310,14 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
                 goto cleanup;
             }
             buf->cursor = buf->cursor + actual_length - buf->size;
+            length -= actual_length;
         } else {
             if (copy_to_user(buffer, buf->start + buf->cursor, actual_length)) {
                 ret = -EFAULT;
                 goto cleanup;
             }
             buf->cursor = buf->cursor + actual_length;
+            length -= actual_length;
         }
 
         if (finished_line) {
@@ -321,6 +330,8 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
 
     cleanup:
         mutex_unlock(&buf->lock);
+        printk(KERN_INFO "ret: %zd", ret);
+        buffer_show(buf);
         return ret;
 }
 
@@ -369,8 +380,8 @@ static ssize_t leftpad_write(struct file *file, const char *buffer, size_t lengt
     }
 
     for (i = 0; i < actual_length; i++) {
-        if (buf->start[buf->cursor + i % buf->size] == '\n') {
-            append_newline(i % buf->size, buf);
+        if (buf->start[buf->cursor + buf->length + i % buf->size] == '\n') {
+            append_newline(buf->cursor + buf->length + i % buf->size, buf);
         }
     }
 
