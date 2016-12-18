@@ -309,15 +309,11 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
                 ret = -EFAULT;
                 goto cleanup;
             }
-            buf->cursor = buf->cursor + actual_length - buf->size;
-            length -= actual_length;
         } else {
             if (copy_to_user(buffer, buf->start + buf->cursor, actual_length)) {
                 ret = -EFAULT;
                 goto cleanup;
             }
-            buf->cursor = buf->cursor + actual_length;
-            length -= actual_length;
         }
 
         if (finished_line) {
@@ -325,6 +321,8 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
             buf->padding_left = -1;
         }
 
+        buf->cursor = buf->cursor + actual_length % buf->size;
+        buf->length -= actual_length;
         ret += actual_length;
     }
 
