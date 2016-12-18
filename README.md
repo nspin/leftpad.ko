@@ -15,9 +15,9 @@ To that end, here is an implementation of `leftPad()` **inside** the kernel.
 ```
 $ make
 $ insmod leftpad.ko leftpad_width=10
-$ 1337<>/dev/leftpad
-$ echo "foobar" >&1337
-$ cat <&1337
+$ exec 8<>/dev/leftpad
+$ echo "foobar" >&8
+$ cat <&8
     foobar
 $
 ```

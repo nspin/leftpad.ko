@@ -72,7 +72,7 @@ struct buffer {
     wait_queue_head_t read_queue;
     struct mutex lock;
     char *start;
-    size_t cursor, size, length;
+    size_t size, cursor, length;
     ssize_t padding_left;
     struct newline *head, *tail;
 };
@@ -151,19 +151,21 @@ static void buffer_show(struct buffer *buf)
     char *str = kmalloc(buf->length + 1, GFP_KERNEL);
 
     for (i = 0; i < buf->length; i++) {
-        str[i] = buf->start[buf->cursor + i % buf->size];
+        str[i] = buf->start[(buf->cursor + i) % buf->size];
     }
-    str[i] = 0;
+    str[buf->length] = 0;
 
     printk(KERN_INFO "Showing leftpad buffer at %p:\n", buf);
+    printk(KERN_CONT "   length: %zd\n", buf->size);
+    printk(KERN_CONT "   cursor: %zd\n", buf->cursor);
+    printk(KERN_CONT "   length: %zd\n", buf->length);
+    printk(KERN_CONT "   contents: \"%s\"\n", str);
     printk(KERN_CONT "   padding_left: %zd\n", buf->padding_left);
-
     printk(KERN_CONT "   newlines:\n");
     for (cur = buf->head->next; cur != buf->tail; cur = cur->next) {
-        printk(KERN_CONT "     +%zd\n", cur->ix - buf->cursor % buf->size);
+        printk(KERN_CONT "     +%zd\n", (cur->ix - buf->cursor) % buf->size);
     }
 
-    printk(KERN_CONT "   contents: \"%s\"\n", str);
 }
 #endif
 
@@ -243,7 +245,7 @@ static int leftpad_release(struct inode *inode, struct file *file)
 static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff_t * offset)
 {
     struct buffer *buf = file->private_data;
-    size_t line_length, actual_length;
+    size_t line_length, actual_length, chunk_len;
     int finished_line;
     ssize_t ret = 0;
 
@@ -264,7 +266,7 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
         }
     }
 
-    line_length = buf->head->next->ix - buf->cursor % leftpad_get_buffer_size();
+    line_length = (buf->head->next->ix - buf->cursor) % leftpad_get_buffer_size();
 
     if (buf->padding_left == -1) {
         buf->padding_left = max((ssize_t) 0, (ssize_t) leftpad_get_width() - (ssize_t) line_length);
@@ -301,11 +303,12 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
         }
 
         if (buf->cursor + actual_length > buf->size) {
-            if (copy_to_user(buffer, buf->start + buf->cursor, buf->size - buf->cursor)) {
+            chunk_len = buf->size - buf->cursor;
+            if (copy_to_user(buffer, buf->start + buf->cursor, chunk_len)) {
                 ret = -EFAULT;
                 goto cleanup;
             }
-            if (copy_to_user(buffer, buf->start, actual_length - (buf->size - buf->cursor))) {
+            if (copy_to_user(buffer + chunk_len, buf->start, actual_length - chunk_len)) {
                 ret = -EFAULT;
                 goto cleanup;
             }
@@ -322,7 +325,7 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
             buf->padding_left = -1;
         }
 
-        buf->cursor = buf->cursor + actual_length % buf->size;
+        buf->cursor = (buf->cursor + actual_length) % buf->size;
         buf->length -= actual_length;
         ret += actual_length;
     }
@@ -337,7 +340,7 @@ static ssize_t leftpad_write(struct file *file, const char *buffer, size_t lengt
 {
     size_t i;
     struct buffer *buf = file->private_data;
-    ssize_t actual_length;
+    size_t chunk_len;
     ssize_t ret;
 
     if (mutex_lock_interruptible(&buf->lock)) {
@@ -349,44 +352,43 @@ static ssize_t leftpad_write(struct file *file, const char *buffer, size_t lengt
         goto cleanup;
     }
 
-    actual_length = min(length, buf->size - buf->length);
-
     /* 3 cases (c = cursor, e = end of data, n = end of data after write):
      *     [ c e n ]
      *     [ n c e ]
      *     [ e n c ]
      */
-    if (buf->cursor + buf->length + actual_length <= buf->size) {
-        if (copy_from_user(buf->start + buf->cursor + buf->length, buffer, actual_length)) {
+    if (buf->cursor + buf->length + length <= buf->size) {
+        if (copy_from_user(buf->start + buf->cursor + buf->length, buffer, length)) {
             ret = -EFAULT;
             goto cleanup;
         }
     } else if (buf->cursor + buf->length <= buf->size) {
-        if (copy_from_user(buf->start + buf->cursor + buf->length, buffer, buf->size - buf->length)) {
+        chunk_len = buf->size - (buf->cursor + buf->length);
+        if (copy_from_user(buf->start + buf->cursor + buf->length, buffer, chunk_len)) {
             ret = -EFAULT;
             goto cleanup;
         }
-        if (copy_from_user(buf->start, buffer + buf->size - buf->length, length - buf->size + buf->length)) {
+        if (copy_from_user(buf->start, buffer + chunk_len, length - chunk_len)) {
             ret = -EFAULT;
             goto cleanup;
         }
     } else {
-        if (copy_from_user(buf->start + buf->cursor + buf->length - buf->size, buffer, actual_length)) {
+        if (copy_from_user(buf->start + (buf->cursor + buf->length) % buf->size, buffer, length)) {
             ret = -EFAULT;
             goto cleanup;
         }
     }
 
-    for (i = 0; i < actual_length; i++) {
-        if (buf->start[buf->cursor + buf->length + i % buf->size] == '\n') {
-            append_newline(buf->cursor + buf->length + i % buf->size, buf);
+    for (i = 0; i < length; i++) {
+        if (buf->start[(buf->cursor + buf->length + i) % buf->size] == '\n') {
+            append_newline((buf->cursor + buf->length + i) % buf->size, buf);
         }
     }
 
     wake_up_interruptible(&buf->read_queue);
 
-    buf->length += actual_length;
-    ret = actual_length;
+    buf->length += length;
+    ret = length;
 
 #ifdef LEFTPAD_DEBUG
     buffer_show(buf);
