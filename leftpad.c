@@ -146,9 +146,9 @@ static void buffer_show(struct buffer *buf)
     }
     str[i] = 0;
 
-    printk(KERN_INFO "Showing leftpad buffer at %p:", buf);
-    printk(KERN_CONT "   padding_left: %lu", buf->padding_left);
-    printk(KERN_CONT "   contents: \"%s\"", str);
+    printk(KERN_INFO "Showing leftpad buffer at %p:\n", buf);
+    printk(KERN_CONT "   padding_left: %lu\n", buf->padding_left);
+    printk(KERN_CONT "   contents: \"%s\"\n", str);
 }
 
 
