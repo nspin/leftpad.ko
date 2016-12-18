@@ -3,4 +3,5 @@
 *.order
 *.symvers
 *.mod.*
+*.out
 .*
