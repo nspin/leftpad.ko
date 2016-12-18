@@ -267,7 +267,7 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
     line_length = buf->head->next->ix - buf->cursor % leftpad_get_buffer_size();
 
     if (buf->padding_left == -1) {
-        buf->padding_left = max((size_t) 0, leftpad_get_width() - line_length);
+        buf->padding_left = max((ssize_t) 0, (ssize_t) leftpad_get_width() - (ssize_t) line_length);
     }
 
     if (buf->padding_left >= length) {
@@ -317,6 +317,7 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
         }
 
         if (finished_line) {
+            buf->head->next->next->prev = buf->head;
             buf->head->next = buf->head->next->next;
             buf->padding_left = -1;
         }
@@ -328,7 +329,6 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
 
     cleanup:
         mutex_unlock(&buf->lock);
-        printk(KERN_INFO "ret: %zd", ret);
         buffer_show(buf);
         return ret;
 }
