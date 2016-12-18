@@ -78,7 +78,6 @@ static struct buffer *buffer_alloc(unsigned long size)
 
 static void buffer_free(struct buffer *buf)
 {
-    printk(KERN_INFO "freeing");
     kfree(buf->start);
     kfree(buf);
 }
@@ -169,11 +168,8 @@ static int leftpad_open(struct inode *inode, struct file *file)
     if (unlikely(!buf)) {
         return -ENOMEM;
     }
-
     file->private_data = buf;
-
     try_module_get(THIS_MODULE);
-
     return SUCCESS;
 }
 
