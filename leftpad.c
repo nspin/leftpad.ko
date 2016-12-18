@@ -31,7 +31,7 @@ MODULE_SUPPORTED_DEVICE(DEVICE_NAME);
 /* PARAMS */
 
 
-static short leftpad_width = 80;
+static short leftpad_width = 10;
 static short leftpad_fill = 32;
 static unsigned long leftpad_buffer_size = 1024;
 
