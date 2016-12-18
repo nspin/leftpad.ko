@@ -43,6 +43,17 @@ module_param(leftpad_buffer_size, ulong, 0000);
 MODULE_PARM_DESC(leftpad_buffer_size, "Size of internal ring buffer.");
 
 
+static unsigned long leftpad_get_width(void)
+{
+    return leftpad_width % LEFT_PAD_WIDTH_MODULUS;
+}
+
+static char leftpad_get_fill(void)
+{
+    return leftpad_fill % 128;
+}
+
+
 /* STATE */
 
 
@@ -94,6 +105,16 @@ static struct buffer *buffer_alloc(unsigned long size)
     buf->length = 0;
     buf->padding_left = -1;
 
+    buf->head = kmalloc(sizeof(*buf->head), GFP_KERNEL);
+    if (unlikely(!buf->head)) {
+        return NULL;
+    }
+
+    buf->tail = kmalloc(sizeof(*buf->tail), GFP_KERNEL);
+    if (unlikely(!buf->tail)) {
+        return NULL;
+    }
+
     buf->head->prev = NULL;
     buf->head->ix = -1;
     buf->head->next = buf->tail;
@@ -115,19 +136,21 @@ static void buffer_free(struct buffer *buf)
     kfree(buf);
 }
 
-
-/* LOGIC */
-
-
-static unsigned long leftpad_get_width(void)
+static void buffer_show(struct buffer *buf)
 {
-    return leftpad_width % LEFT_PAD_WIDTH_MODULUS;
+    int i;
+    char *str = kmalloc(buf->length + 1, GFP_KERNEL);
+
+    for (i = 0; i < buf->length; i++) {
+        str[i] = buf->start[buf->cursor + i % buf->size];
+    }
+    str[i] = 0;
+
+    printk(KERN_INFO "Showing leftpad buffer at %p:", buf);
+    printk(KERN_CONT "   padding_left: %lu", buf->padding_left);
+    printk(KERN_CONT "   contents: \"%s\"", str);
 }
 
-static char leftpad_get_fill(void)
-{
-    return leftpad_fill % 128;
-}
 
 /* CORE */
 
@@ -166,7 +189,10 @@ static int __init leftpad_init(void)
     }
 
     misc_register(&leftpad_miscdevice);
-    printk(KERN_INFO "Init leftpad: width=%lu, fill=ascii(%i)", leftpad_get_width(), leftpad_get_fill());
+
+    printk(KERN_INFO "Init leftpad: width=%lu, fill=ascii(%i), buffer_size=(%lu)",
+            leftpad_get_width(), leftpad_get_fill(), leftpad_buffer_size);
+
     return SUCCESS;
 }
 
@@ -208,6 +234,7 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
     unsigned long line_length;
     int finished_line;
     ssize_t result;
+    printk("read size: %zu", length);
 
     if (mutex_lock_interruptible(&buf->lock)) {
         return -ERESTARTSYS;
@@ -228,9 +255,11 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
 
     line_length = buf->head->next->ix - buf->cursor % leftpad_buffer_size;
 
+    printk(KERN_INFO "padding_left = %zu", buf->padding_left);
     if (buf->padding_left == -1) {
         buf->padding_left = max((unsigned long) 0, leftpad_get_width() - line_length);
     }
+    printk(KERN_INFO "padding_left = %zu", buf->padding_left);
 
     if (buf->padding_left >= length) {
 
@@ -358,6 +387,8 @@ static ssize_t leftpad_write(struct file *file, const char *buffer, size_t lengt
 
         wake_up_interruptible(&buf->read_queue);
     }
+
+    buffer_show(buf);
 
     mutex_unlock(&buf->lock);
     return actual_length;
