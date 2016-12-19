@@ -2,8 +2,8 @@
 exec 8<>/dev/leftpad
 echo foobar >&8
 head -n 1 <&8
-echo 43 > /sys/module/leftpad/parameters/leftpad_fill
-echo 20 > /sys/module/leftpad/parameters/leftpad_width
+echo 43 > /sys/module/leftpad/parameters/fill
+echo 20 > /sys/module/leftpad/parameters/width
 exec 9<>/dev/leftpad
 echo bizbaz >&9
 head -n 1 <&9

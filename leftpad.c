@@ -32,31 +32,31 @@ MODULE_SUPPORTED_DEVICE(LEFTPAD_DEVICE_NAME);
 /* PARAMS */
 
 
-static int leftpad_width = 32;
-static int leftpad_fill = 32;
-static int leftpad_buffer_size = 1024;
+static int width = 32;
+static int fill = 32;
+static int buffer_size = 1024;
 
-module_param(leftpad_width, int, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(leftpad_width, "Lines are padded so that their width (not including EOL) is the residue class modulo 1024 of the value of this parameter.");
-module_param(leftpad_fill, int, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(leftpad_fill, "The residue class modulo 128 of the value of this parameter is used to pad lines shorter than leftpad_width.");
-module_param(leftpad_buffer_size, int, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(leftpad_buffer_size, "Size of internal ring buffer.");
+module_param(width, int, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(width, "Lines are padded so that their width (not including EOL) is the residue class modulo 1024 of the value of this parameter.");
+module_param(fill, int, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(fill, "The residue class modulo 128 of the value of this parameter is used to pad lines shorter than width.");
+module_param(buffer_size, int, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(buffer_size, "Size of internal ring buffer.");
 
 
-static size_t leftpad_get_width(void)
+static size_t get_width(void)
 {
-    return leftpad_width % LEFTPAD_WIDTH_MODULUS;
+    return width % LEFTPAD_WIDTH_MODULUS;
 }
 
-static char leftpad_get_fill(void)
+static char get_fill(void)
 {
-    return leftpad_fill % 128;
+    return fill % 128;
 }
 
-static size_t leftpad_get_buffer_size(void)
+static size_t get_buffer_size(void)
 {
-    return leftpad_buffer_size;
+    return buffer_size;
 }
 
 
@@ -206,7 +206,7 @@ static int __init leftpad_init(void)
 
 #ifdef LEFTPAD_DEBUG
     printk(KERN_INFO "Init leftpad: width=%zu, fill=ascii(%d), buffer_size=%zu\n",
-            leftpad_get_width(), leftpad_get_fill(), leftpad_get_buffer_size());
+            get_width(), get_fill(), get_buffer_size());
 #endif
 
     return SUCCESS;
@@ -227,7 +227,7 @@ module_exit(leftpad_exit);
 
 static int leftpad_open(struct inode *inode, struct file *file)
 {
-    struct buffer *buf = buffer_alloc(leftpad_get_buffer_size(), leftpad_get_width(), leftpad_get_fill());
+    struct buffer *buf = buffer_alloc(get_buffer_size(), get_width(), get_fill());
     if (unlikely(!buf)) {
         return -ENOMEM;
     }
@@ -276,7 +276,7 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
         }
     }
 
-    line_length = (buf->head->next->ix - buf->cursor) % leftpad_get_buffer_size();
+    line_length = (buf->head->next->ix - buf->cursor) % buf->size;
 
     if (buf->padding_left == -1) {
         buf->padding_left = max((ssize_t) 0, (ssize_t) buf->width - (ssize_t) line_length);
