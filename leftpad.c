@@ -18,7 +18,12 @@
 
 #define LEFTPAD_DEVICE_NAME "leftpad"
 #define LEFTPAD_MAJOR 1337
-#define LEFTPAD_WIDTH_MODULUS 1024
+
+#define IOCTL_SET_WIDTH _IOR(LEFTPAD_MAJOR, 0, char *)
+#define IOCTL_SET_FILL _IOR(LEFTPAD_MAJOR, 1, char *)
+
+#define MAX_WIDTH 1024
+
 #define SUCCESS 0
 #define FAILURE -1
 
@@ -37,16 +42,16 @@ static int fill = 32;
 static int buffer_size = 1024;
 
 module_param(width, int, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(width, "Lines are padded so that their width (not including EOL) is the residue class modulo 1024 of the value of this parameter.");
+MODULE_PARM_DESC(width, "Lines are padded so that their width (not including EOL) is the residue class modulo MAX_WIDTH of the value of this parameter.");
 module_param(fill, int, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(fill, "The residue class modulo 128 of the value of this parameter is used to pad lines shorter than width.");
+MODULE_PARM_DESC(fill, "The residue class modulo 256 of the value of this parameter is used to pad lines shorter than width.");
 module_param(buffer_size, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(buffer_size, "Size of internal ring buffer.");
 
 
 static size_t get_width(void)
 {
-    return width % LEFTPAD_WIDTH_MODULUS;
+    return width % MAX_WIDTH;
 }
 
 static char get_fill(void)
@@ -184,6 +189,7 @@ static void buffer_show(struct buffer *buf)
 
 static int leftpad_open(struct inode *, struct file *);
 static int leftpad_release(struct inode *, struct file *);
+static long leftpad_ioctl(struct file *, unsigned int, unsigned long);
 static ssize_t leftpad_read(struct file *, char *, size_t, loff_t *);
 static ssize_t leftpad_write(struct file *, const char *, size_t, loff_t *);
 
@@ -192,10 +198,11 @@ static ssize_t leftpad_write(struct file *, const char *, size_t, loff_t *);
 
 
 static struct file_operations fops = {
-    .read = leftpad_read,
-    .write = leftpad_write,
     .open = leftpad_open,
-    .release = leftpad_release
+    .release = leftpad_release,
+    .unlocked_ioctl = leftpad_ioctl,
+    .read = leftpad_read,
+    .write = leftpad_write
 };
 
 static int __init leftpad_init(void)
@@ -247,6 +254,43 @@ static int leftpad_release(struct inode *inode, struct file *file)
     module_put(THIS_MODULE);
 	buffer_free(file->private_data);
     return SUCCESS;
+}
+
+static long leftpad_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioctl_param)
+{
+    int ret = SUCCESS;
+    struct buffer *buf = file->private_data;
+
+    if (mutex_lock_interruptible(&buf->lock)) {
+        return -ERESTARTSYS;
+    }
+
+    switch (ioctl_num) {
+
+        case IOCTL_SET_WIDTH:
+            if (ioctl_param > MAX_WIDTH) {
+                ret = -EINVAL;
+                goto cleanup;
+            }
+            buf->width = ioctl_param;
+            break;
+
+        case IOCTL_SET_FILL:
+            if (ioctl_param > 256) {
+                ret = -EINVAL;
+                goto cleanup;
+            }
+            buf->fill = ioctl_param;
+            break;
+
+        default:
+            ret = -EINVAL;
+            goto cleanup;
+    }
+
+    cleanup:
+        mutex_unlock(&buf->lock);
+        return ret;
 }
 
 static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff_t * offset)
@@ -341,7 +385,6 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
 
     cleanup:
         mutex_unlock(&buf->lock);
-        buffer_show(buf);
         return ret;
 }
 

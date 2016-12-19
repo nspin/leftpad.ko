@@ -19,6 +19,13 @@ To that end, here is an implementation of `leftPad()` **inside** the kernel.
 All parameters are mutable.
 The values at the time a the device is opened determine the behavior of that instance.
 
+# IOCTL
+
+> `800d3900`: set width
+> `800d3901`: set fill
+
+Changes apply only to a specific instance.
+
 ## Example Usage
 
 ```
