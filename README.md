@@ -12,12 +12,12 @@ To that end, here is an implementation of `leftPad()` *inside* the kernel.
 
 ## Parameters
 
-* `width`: width to pad to [default 32]
-* `fill`: value of the character to fill with (e.g. 32 for ' ') [default 32]
-* `buffer_size`: size of the internal ring buffer [default 1024]
+* `width`: width to pad to (default 32)
+* `fill`: value of the character to fill with (e.g. 32 for ' ') (default 32)
+* `buffer_size`: size of the internal ring buffer (default 1024)
 
 All parameters are mutable.
-The values at the time a the device is opened determine the behavior of that instance.
+The values at the time the device is opened determine the behavior of that instance.
 
 ## IOCTL
 
