@@ -39,10 +39,17 @@ $ head -n 1 <&8
 $ echo 43 > /sys/module/leftpad/parameters/fill
 $ echo 20 > /sys/module/leftpad/parameters/width
 $ exec 9<>/dev/leftpad
-$ echo bizbaz >&9
+$ echo bazqux >&9
 $ head -n 1 <&9
-++++++++++++++bizbaz
+++++++++++++++bazqux
+$ exec 10<>/dev/leftpad
+$ python -c 'import fcntl; fcntl.ioctl(10, 0x800d3900, 12); fcntl.ioctl(10, 0x800d3901, ord("_"))'
+$ echo zyzzy >&10
+$ head -n 1 <&10
+_______xyzzy
+$ #
 $ # \(@_@)/
+$ #
 ```
 
 ## Implementation Details
