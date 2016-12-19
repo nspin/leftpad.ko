@@ -15,15 +15,16 @@ To that end, here is an implementation of `leftPad()` **inside** the kernel.
 ```
 $ make
 $ insmod leftpad.ko leftpad_width=10
+$ mknod /dev/leftpad c 1337 0 -m 666
 $ exec 8<>/dev/leftpad
-$ echo "foobar" >&8
-$ cat <&8
+$ echo foobar >&8
+$ head -n 1 <&8
     foobar
-$
+$ # \(@_@)/
 ```
 
 ## Implementation Details
 
 Each time `/dev/leftpad` is opened, a ring buffer of size `leftpad_buffer_size` is associated with the open file.
-Writing blocks if there is not enough space.
-Reading blocks if there is no newline in the buffer.
+Writing fails if there is not enough space in the buffer.
+Reads happen by line, and block until there is a newline in the buffer.
