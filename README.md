@@ -10,6 +10,15 @@ LPAAS is a step in the right direction, but I believe we can do better.
 
 To that end, here is an implementation of `leftPad()` **inside** the kernel.
 
+## Parameters
+
+> `leftpad_width`: width to pad to [default 32]
+> `leftpad_fill`: value of the character to fill with (e.g. 32 for ' ') [default 32]
+> `leftpad_buffer_size`: size of the internal ring buffer [default 1024]
+
+All parameters are mutable.
+The values at the time a the device is opened determine the behavior of that instance.
+
 ## Example Usage
 
 ```
@@ -20,6 +29,12 @@ $ exec 8<>/dev/leftpad
 $ echo foobar >&8
 $ head -n 1 <&8
     foobar
+$ echo 43 > /sys/module/leftpad/parameters/leftpad_fill
+$ echo 20 > /sys/module/leftpad/parameters/leftpad_width
+$ exec 9<>/dev/leftpad
+$ echo bizbaz >&9
+$ head -n 1 <&9
+++++++++++++++bizbaz
 $ # \(@_@)/
 ```
 
