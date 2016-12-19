@@ -1,4 +1,3 @@
-#!/bin/sh
 exec 8<>/dev/leftpad
 sed 's#\\#\\\\#g' | (
         while read line; do

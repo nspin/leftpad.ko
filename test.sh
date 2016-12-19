@@ -1,4 +1,3 @@
-#!/bin/sh
 exec 8<>/dev/leftpad
 echo foobar >&8
 head -n 1 <&8
