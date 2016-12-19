@@ -5,7 +5,7 @@ In March of 2016, the removal of a package called left-pad from npm created a [g
 The package consisted only of a single function, `leftPad()`, which pads strings to a given width.
 This event demonstrates the disaster potential of failing to take left-padding seriously.
 
-[left-pad.io](https://left-pad.io), created soon after the situation described above, was the first ever LPAAS (left-pad-as-a-service) product.
+[left-pad.io](http://left-pad.io), created soon after the situation described above, was the first ever LPAAS (left-pad-as-a-service) product.
 LPAAS is a step in the right direction, but I believe we can do better.
 
 To that end, here is an implementation of `leftPad()` *inside* the kernel.
