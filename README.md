@@ -8,7 +8,7 @@ This event demonstrates the disaster potential of failing to take left-padding s
 [left-pad.io](left-pad.io), created soon after the situation described above, was the first ever LPAAS (left-pad-as-a-service) product.
 LPAAS is a step in the right direction, but I believe we can do better.
 
-To that end, here is an implementation of `leftPad()` **inside** the kernel.
+To that end, here is an implementation of `leftPad()` *inside* the kernel.
 
 ## Parameters
 
