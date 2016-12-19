@@ -1,6 +1,8 @@
 #!/bin/sh
 exec 8<>/dev/leftpad
-while read line; do
-    printf '%s\n' "$line" >&8
-    head -n 1 <&8
-done
+sed 's#\\#\\\\#g' | (
+        while read line; do
+            printf '%s\n' "$line" >&8
+            head -n 1 <&8
+        done
+    )

@@ -40,7 +40,7 @@ module_param(leftpad_width, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(leftpad_width, "Lines are padded so that their width (not including EOL) is the residue class modulo 1024 of the value of this parameter.");
 module_param(leftpad_fill, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(leftpad_fill, "The residue class modulo 128 of the value of this parameter is used to pad lines shorter than leftpad_width.");
-module_param(leftpad_buffer_size, int, 0000);
+module_param(leftpad_buffer_size, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(leftpad_buffer_size, "Size of internal ring buffer.");
 
 
@@ -71,8 +71,13 @@ struct newline {
 struct buffer {
     wait_queue_head_t read_queue;
     struct mutex lock;
+
+    size_t size, width;
+    char fill;
+
     char *start;
-    size_t size, cursor, length;
+    size_t cursor, length;
+
     ssize_t padding_left;
     struct newline *head, *tail;
 };
@@ -91,7 +96,7 @@ static int append_newline(size_t ix, struct buffer *buf)
     return SUCCESS;
 }
 
-static struct buffer *buffer_alloc(size_t size)
+static struct buffer *buffer_alloc(size_t size, size_t width, char fill)
 {
     struct buffer *buf = kmalloc(sizeof(*buf), GFP_KERNEL);
     if (unlikely(!buf)) {
@@ -107,9 +112,13 @@ static struct buffer *buffer_alloc(size_t size)
     init_waitqueue_head(&buf->read_queue);
     mutex_init(&buf->lock);
 
-    buf->cursor = 0;
     buf->size = size;
+    buf->width = width;
+    buf->fill = fill;
+
+    buf->cursor = 0;
     buf->length = 0;
+
     buf->padding_left = -1;
 
     buf->head = kmalloc(sizeof(*buf->head), GFP_KERNEL);
@@ -173,8 +182,6 @@ static void buffer_show(struct buffer *buf)
 /* CORE */
 
 
-static char *leftpad_padding;
-
 static int leftpad_open(struct inode *, struct file *);
 static int leftpad_release(struct inode *, struct file *);
 static ssize_t leftpad_read(struct file *, char *, size_t, loff_t *);
@@ -193,12 +200,6 @@ static struct file_operations fops = {
 
 static int __init leftpad_init(void)
 {
-    size_t i;
-    leftpad_padding = kmalloc(leftpad_get_width(), GFP_KERNEL);
-    for (i = 0; i < leftpad_width; i++) {
-        leftpad_padding[i] = leftpad_get_fill();
-    }
-
     if (register_chrdev(LEFTPAD_MAJOR, "leftpad", &fops)) {
         return FAILURE;
     }
@@ -226,12 +227,18 @@ module_exit(leftpad_exit);
 
 static int leftpad_open(struct inode *inode, struct file *file)
 {
-    struct buffer *buf = buffer_alloc(leftpad_get_buffer_size());
+    struct buffer *buf = buffer_alloc(leftpad_get_buffer_size(), leftpad_get_width(), leftpad_get_fill());
     if (unlikely(!buf)) {
         return -ENOMEM;
     }
     file->private_data = buf;
     try_module_get(THIS_MODULE);
+
+#ifdef LEFTPAD_DEBUG
+    printk(KERN_INFO "Create leftpad buffer: width=%zu, fill=ascii(%d), buffer_size=%zu\n",
+            buf->width, buf->fill, buf->size);
+#endif
+
     return SUCCESS;
 }
 
@@ -248,6 +255,9 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
     size_t line_length, actual_length, chunk_len;
     int finished_line;
     ssize_t ret = 0;
+
+    int i;
+    ssize_t padding;
 
     if (mutex_lock_interruptible(&buf->lock)) {
         return -ERESTARTSYS;
@@ -269,25 +279,24 @@ static ssize_t leftpad_read(struct file *file, char *buffer, size_t length, loff
     line_length = (buf->head->next->ix - buf->cursor) % leftpad_get_buffer_size();
 
     if (buf->padding_left == -1) {
-        buf->padding_left = max((ssize_t) 0, (ssize_t) leftpad_get_width() - (ssize_t) line_length);
+        buf->padding_left = max((ssize_t) 0, (ssize_t) buf->width - (ssize_t) line_length);
+    }
+
+    padding = min((ssize_t) length, buf->padding_left);
+    for (i = 0; i < padding; i++) {
+        if (copy_to_user(buffer + i, &(buf->fill), 1)) {
+            ret = -EFAULT;
+            goto cleanup;
+        }
     }
 
     if (buf->padding_left >= length) {
 
-        if (copy_to_user(buffer, leftpad_padding, length)) {
-            ret = -EFAULT;
-            goto cleanup;
-        }
         buf->padding_left -= length;
         ret = length;
         goto cleanup;
 
     } else {
-
-        if (copy_to_user(buffer, leftpad_padding, buf->padding_left)) {
-            ret = -EFAULT;
-            goto cleanup;
-        }
 
         ret += buf->padding_left;
         buffer += buf->padding_left;
